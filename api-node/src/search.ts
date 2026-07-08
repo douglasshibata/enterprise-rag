@@ -1,8 +1,11 @@
 import { Client } from '@opensearch-project/opensearch';
 import axios from 'axios';
 import dotenv from 'dotenv';
+import Redis from 'ioredis';
 
 dotenv.config();
+
+const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
 
 const osHost = process.env.OPENSEARCH_HOST || 'localhost';
 const osPort = process.env.OPENSEARCH_PORT || '9200';
@@ -18,14 +21,34 @@ const client = new Client({
 });
 
 /**
- * Calls the Python backend to generate an embedding for the query.
+ * Calls the Python backend to generate an embedding for the query,
+ * with a Redis caching layer for performance.
  */
 async function getQueryEmbedding(query: string): Promise<number[]> {
+  const cacheKey = `embedding:${Buffer.from(query).toString('base64').substring(0, 32)}`;
+
+  try {
+    const cached = await redis.get(cacheKey);
+    if (cached) {
+      console.log('Using cached embedding for query');
+      return JSON.parse(cached);
+    }
+  } catch (err) {
+    console.error('Redis cache error:', err);
+  }
+
   const pythonBackendUrl = process.env.PYTHON_BACKEND_URL || 'http://localhost:8000';
-  // We need to implement this endpoint in Python or use the same logic here.
-  // For simplicity, let's assume we add a /embed endpoint to the Python backend.
   const response = await axios.post(`${pythonBackendUrl}/embed`, { text: query });
-  return response.data.embedding;
+  const embedding = response.data.embedding;
+
+  try {
+    // Cache for 1 hour
+    await redis.set(cacheKey, JSON.stringify(embedding), 'EX', 3600);
+  } catch (err) {
+    console.error('Failed to cache embedding:', err);
+  }
+
+  return embedding;
 }
 
 export async function hybridSearch(query: string, size: number = 5) {
