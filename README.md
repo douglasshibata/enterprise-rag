@@ -1,62 +1,32 @@
-# Enterprise Knowledge Search & RAG Platform
+# Enterprise Search & RAG Platform
 
-This project demonstrates a production-ready search and retrieval system using Python (FastAPI) for ETL, OpenSearch for hybrid search (BM25 + KNN), and Node.js (TypeScript) for RAG orchestration.
+Production-ready RAG orchestration platform featuring hybrid retrieval and scalable ingestion.
+
+## 📋 Table of Contents
+- [Architecture](#architecture)
+- [Tech Stack](#tech-stack)
+- [Setup](#setup)
+- [Security](#security)
 
 ## Architecture
+- **ETL Pipeline (Python)**: Specialized FastAPI service for document chunking and embedding.
+- **Hybrid Search (OpenSearch)**: BM25 lexical + KNN semantic retrieval.
+- **RAG API (Node.js)**: TypeScript-based orchestration with LLM shielding.
 
-1.  **Ingestion & ETL (Python)**: Uses FastAPI, NLTK for chunking, and Sentence-Transformers for embedding generation.
-2.  **Search Engine (OpenSearch)**: Hybrid search combining lexical (BM25) and semantic (KNN) retrieval.
-3.  **Search API (Node.js/TypeScript)**: Exposes endpoints for search and RAG-style Q&A.
+## Tech Stack
+- **Backend**: Python 3.12, Node.js 20+, TypeScript.
+- **Search**: OpenSearch 2.8.0.
+- **AI**: LangChain, sentence-transformers.
 
-## Project Structure
+## Setup
+1. `docker-compose up -d` (OpenSearch)
+2. `cd backend-python && pip install -r requirements.txt && uvicorn main:app`
+3. `cd api-node && npm install && npm run dev`
 
-- `backend-python/`: FastAPI service for document ingestion and embedding.
-- `api-node/`: Node.js/TypeScript service for search and RAG orchestration.
-- `docker-compose.yml`: Orchestrates OpenSearch and the two microservices.
+## Security
+- **JSON Shielding**: Prevents prompt injection and ensures valid JSON responses.
+- **Rate Limiting**: Integrated at the RAG API level.
+- **Audit**: Log-level tracking of retrieval sources for transparency.
 
-## Getting Started
-
-### Prerequisites
-
-- Docker and Docker Compose
-- Node.js (for local development)
-- Python 3.12 (for local development)
-
-### Running with Docker
-
-```bash
-docker compose up -d
-```
-
-### API Endpoints
-
-- **Python Ingestion**: `POST http://localhost:8001/ingest`
-  ```json
-  {
-    "text": "Your document text here...",
-    "source": "manual-upload"
-  }
-  ```
-- **Node.js Search**: `GET http://localhost:3001/search?q=your+query`
-- **Node.js RAG**: `POST http://localhost:3001/ask`
-  ```json
-  {
-    "question": "What is the document about?"
-  }
-  ```
-
-## Development
-
-### Python Backend
-```bash
-cd backend-python
-pip install -r requirements.txt
-uvicorn app.main:app --reload
-```
-
-### Node.js API
-```bash
-cd api-node
-npm install
-npm run dev
-```
+## License
+Enterprise License
