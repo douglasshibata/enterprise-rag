@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  opensearch:
+    image: opensearchproject/opensearch:2.8.0
+    container_name: rag-opensearch
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - DISABLE_SECURITY_PLUGIN=true
+    ports:
+      - "9201:9200"
+
+  backend-python:
+    build: ./backend-python
+    container_name: rag-backend-python
+    depends_on:
+      - opensearch
+    environment:
+      - OPENSEARCH_HOST=opensearch
+      - OPENSEARCH_PORT=9200
+      - OPENSEARCH_INDEX=enterprise_docs
+    ports:
+      - "8001:8000"
+
+  api-node:
+    build: ./api-node
+    container_name: rag-api-node
+    depends_on:
+      - backend-python
+      - opensearch
+    environment:
+      - OPENSEARCH_HOST=opensearch
+      - OPENSEARCH_PORT=9200
+      - OPENSEARCH_INDEX=enterprise_docs
+      - PYTHON_BACKEND_URL=http://backend-python:8000
+      - PORT=3000
+    ports:
+      - "3001:3000"
