@@ -30,3 +30,26 @@ Production-ready RAG orchestration platform featuring hybrid retrieval and scala
 
 ## License
 Enterprise License
+
+---
+
+## 🛠️ Project Deep Dive & Technical Guide
+
+### 🎯 Main Purpose
+Scalable Hybrid Search Engine with Redis Semantic caching and OpenSearch full-text integration.
+
+### 🧰 Tecnologias Utilizadas (Tech Stack)
+- **Primary Technologies:** Docker / Docker Compose, FastAPI, Node.js / npm, Python 3.12
+- **Deployment Strategy:** Container-ready with standard Docker/Docker Compose integrations where applicable.
+
+### 🚀 Como Implantar e Executar (How to Deploy & Run)
+#### Frontend (Angular / Node.js)
+1. Navigate to the frontend directory.
+2. Install dependencies: `npm install`.
+3. Run development server: `npm start` or `npm run dev`.
+
+#### Python Engine / FastAPI
+1. Install dependencies: `pip install -r requirements.txt`.
+2. Run the server/script: `uvicorn main:app --reload` or `python main.py`.
+
+---
