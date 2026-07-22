@@ -1,8 +1,91 @@
+import os
+import datetime
 import requests
 from bs4 import BeautifulSoup
 import logging
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import OpenSearchVectorSearch
+from langchain_core.embeddings import Embeddings
+from app.embeddings import model as sentence_transformer_model
 
 logger = logging.getLogger(__name__)
+
+class SentenceTransformerEmbeddings(Embeddings):
+    def __init__(self, model):
+        self.model = model
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        return self.model.encode(texts).tolist()
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.model.encode(text).tolist()
+
+import uuid
+from app.database import save_document_copy
+
+def ingestar_documento_no_topico(caminho_pdf: str, topico_escolhido: str, host: str = None, port: int = None, user: str = None, pass_: str = None):
+    """
+    Loads, chunks and indexes a PDF document into the 'documentos-multitopicos' index under the specified topic.
+    Also saves a complete copy of the text to a SQLite relational database.
+    """
+    # 1. Load PDF
+    loader = PyPDFLoader(caminho_pdf)
+    documents = loader.load()
+
+    # Generate complete text for relation DB copy
+    full_text = "\n\n".join(doc.page_content for doc in documents)
+    doc_id = str(uuid.uuid4())
+
+    # Save to SQLite
+    nome_arquivo = os.path.basename(caminho_pdf)
+    save_document_copy(doc_id, nome_arquivo, topico_escolhido, full_text)
+
+    # 2. Chunk text with RecursiveCharacterTextSplitter
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=800,
+        chunk_overlap=150,
+        separators=["\n\n", "\n", " ", ""]
+    )
+    chunks = text_splitter.split_documents(documents)
+
+    # 3. Inject metadata into each chunk
+    data_upload = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    for chunk in chunks:
+        chunk.metadata["doc_id"] = doc_id
+        chunk.metadata["topico"] = topico_escolhido
+        chunk.metadata["nome_arquivo"] = nome_arquivo
+        chunk.metadata["data_upload"] = data_upload
+
+    # 4. Setup embeddings wrapper
+    embeddings = SentenceTransformerEmbeddings(sentence_transformer_model)
+
+    # 5. Connection parameters
+    if not host:
+        host = os.getenv("OPENSEARCH_HOST", "localhost")
+    if not port:
+        port = int(os.getenv("OPENSEARCH_PORT", 9200))
+    if not user:
+        user = os.getenv("OPENSEARCH_USER", "admin")
+    if not pass_:
+        pass_ = os.getenv("OPENSEARCH_PASS", "admin")
+
+    opensearch_url = f"http://{host}:{port}"
+
+    # 6. Bulk ingest to OpenSearch
+    vector_store = OpenSearchVectorSearch.from_documents(
+        documents=chunks,
+        embedding=embeddings,
+        opensearch_url=opensearch_url,
+        http_auth=(user, pass_),
+        index_name="documentos-multitopicos",
+        use_ssl=False,
+        verify_certs=False,
+    )
+
+    return len(chunks), doc_id
 
 def fetch_url_content(url: str) -> str:
     """

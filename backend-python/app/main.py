@@ -18,8 +18,17 @@ from app.config import settings
 from app.chunking import chunk_text
 from app.embeddings import generate_embeddings, generate_query_embedding
 from app.opensearch_client import OpenSearchClient
-from app.ingest import fetch_url_content
+from app.ingest import fetch_url_content, ingestar_documento_no_topico
+from app.guardrails import check_input_guardrail
+from app.database import init_db
 from dotenv import load_dotenv
+
+from langchain_community.vectorstores import OpenSearchVectorSearch
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.language_models.llms import LLM
+from langchain_core.callbacks.manager import CallbackManagerForLLMRun
 
 load_dotenv()
 
@@ -35,6 +44,41 @@ REQUEST_COUNT = Counter("http_requests_total", "Total HTTP requests", ["method",
 REQUEST_DURATION = Histogram("http_request_duration_seconds", "HTTP request duration", ["method", "endpoint"])
 
 os_client = OpenSearchClient()
+
+class MockOrRealLLM(LLM):
+    model_name: str = "mock-llama3"
+
+    def _call(
+        self,
+        prompt: str,
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> str:
+        # Check if we should use a real LLM (like OpenAI if configured)
+        openai_key = os.getenv("OPENAI_API_KEY")
+        if openai_key and openai_key != "mock-key":
+            try:
+                from langchain_openai import ChatOpenAI
+                real_llm = ChatOpenAI(api_key=openai_key)
+                return real_llm.predict(prompt)
+            except Exception as e:
+                logger.warning(f"Failed to use real OpenAI LLM: {e}")
+
+        # Fallback simulated response
+        context_match = re.search(r"Contexto:\s*(.*?)\s*Pergunta:", prompt, re.DOTALL | re.IGNORECASE)
+        context_str = context_match.group(1).strip() if context_match else ""
+
+        if not context_str or "não possui dados suficientes" in context_str.lower() or context_str == "Não possui dados suficientes.":
+            return "Não possuo dados suficientes no contexto fornecido para responder à sua pergunta."
+
+        first_line = context_str.split("\n")[0] if context_str else ""
+        return f"[MOCK LLM RESPONSE] Com base no contexto técnico fornecido (especificamente: {first_line[:150]}...), " \
+               f"a rotação de logs e gerenciamento do sistema funcionam conforme documentado."
+
+    @property
+    def _llm_type(self) -> str:
+        return "mock_or_real"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -104,6 +148,10 @@ async def get_api_key(api_key: str = Security(api_key_header)):
     if not api_key or api_key != settings.api_key:
         raise HTTPException(status_code=403, detail="Invalid API Key")
     return api_key
+
+class QueryRequest(BaseModel):
+    pergunta: str
+    topico: str
 
 class IngestRequest(BaseModel):
     text: Optional[str] = None
