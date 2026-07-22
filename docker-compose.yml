@@ -12,38 +12,64 @@ services:
       - DISABLE_SECURITY_PLUGIN=true
     ports:
       - "9201:9200"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   backend-python:
     build: ./backend-python
     container_name: rag-backend-python
     depends_on:
-      - opensearch
+      opensearch:
+        condition: service_healthy
     environment:
       - OPENSEARCH_HOST=opensearch
       - OPENSEARCH_PORT=9200
       - OPENSEARCH_INDEX=enterprise_docs
+      - API_KEY=default-secret-key
     ports:
       - "8001:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
 
   api-node:
     build: ./api-node
     container_name: rag-api-node
     depends_on:
-      - backend-python
-      - opensearch
-      - redis
+      backend-python:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       - OPENSEARCH_HOST=opensearch
       - OPENSEARCH_PORT=9200
       - OPENSEARCH_INDEX=enterprise_docs
       - PYTHON_BACKEND_URL=http://backend-python:8000
       - REDIS_URL=redis://redis:6379
+      - API_KEY=default-secret-key
       - PORT=3000
     ports:
       - "3001:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
 
   redis:
     image: redis:7.4-alpine
     container_name: rag-redis
     ports:
       - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
