@@ -1,14 +1,14 @@
-import os
 from opensearchpy import OpenSearch, helpers
 import logging
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 class OpenSearchClient:
     def __init__(self):
-        host = os.getenv("OPENSEARCH_HOST", "localhost")
-        port = int(os.getenv("OPENSEARCH_PORT", 9200))
-        auth = (os.getenv("OPENSEARCH_USER", "admin"), os.getenv("OPENSEARCH_PASS", "admin"))
+        host = settings.opensearch_host
+        port = settings.opensearch_port
+        auth = (settings.opensearch_user, settings.opensearch_pass)
 
         self.client = OpenSearch(
             hosts=[{'host': host, 'port': port}],
@@ -19,7 +19,7 @@ class OpenSearchClient:
             ssl_assert_hostname=False,
             ssl_show_warn=False
         )
-        self.index_name = os.getenv("OPENSEARCH_INDEX", "enterprise_docs")
+        self.index_name = settings.opensearch_index
 
     def create_index(self):
         """

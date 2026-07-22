@@ -1,6 +1,7 @@
 import { hybridSearch } from './search';
 import OpenAI from 'openai';
 import dotenv from 'dotenv';
+import { logInfo, logError } from './logger';
 
 dotenv.config();
 
@@ -16,15 +17,19 @@ const openai = new OpenAI({
  * 3. Call LLM (real call if API key provided, otherwise mock).
  */
 export async function askQuestion(question: string) {
+  logInfo('Starting RAG flow for question', { question: question.substring(0, 50) });
   const searchResults = await hybridSearch(question, 3);
   const hits = searchResults.hits;
 
   if (hits.length === 0) {
+    logInfo('No relevant chunks found in OpenSearch for question');
     return {
       answer: "I couldn't find any relevant information to answer your question.",
       citations: [],
     };
   }
+
+  logInfo(`Found ${hits.length} relevant chunks inside OpenSearch`);
 
   const context = hits
     .map((hit: any) => hit._source.text)
@@ -39,6 +44,7 @@ export async function askQuestion(question: string) {
 
   if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== 'mock-key') {
     try {
+      logInfo('Invoking OpenAI completion API');
       const response = await openai.chat.completions.create({
         model: process.env.LLM_MODEL || 'gpt-3.5-turbo',
         messages: [
@@ -52,11 +58,12 @@ export async function askQuestion(question: string) {
         citations,
       };
     } catch (error: any) {
-      console.error('LLM Call failed, falling back to mock:', error.message);
+      logError('LLM Call failed, falling back to mock response', error);
     }
   }
 
   // Fallback Mock LLM Response
+  logInfo('OpenAI key not configured or failed, returning Fallback Mock Response');
   const answer = `[MOCK LLM ANSWER based on ${hits.length} chunks]
 Relevant context found in ${hits[0]._source.source}.
 The provided text mentions: "${hits[0]._source.text.substring(0, 150)}..."`;
