@@ -23,13 +23,25 @@ class SentenceTransformerEmbeddings(Embeddings):
     def embed_query(self, text: str) -> list[float]:
         return self.model.encode(text).tolist()
 
+import uuid
+from app.database import save_document_copy
+
 def ingestar_documento_no_topico(caminho_pdf: str, topico_escolhido: str, host: str = None, port: int = None, user: str = None, pass_: str = None):
     """
     Loads, chunks and indexes a PDF document into the 'documentos-multitopicos' index under the specified topic.
+    Also saves a complete copy of the text to a SQLite relational database.
     """
     # 1. Load PDF
     loader = PyPDFLoader(caminho_pdf)
     documents = loader.load()
+
+    # Generate complete text for relation DB copy
+    full_text = "\n\n".join(doc.page_content for doc in documents)
+    doc_id = str(uuid.uuid4())
+
+    # Save to SQLite
+    nome_arquivo = os.path.basename(caminho_pdf)
+    save_document_copy(doc_id, nome_arquivo, topico_escolhido, full_text)
 
     # 2. Chunk text with RecursiveCharacterTextSplitter
     text_splitter = RecursiveCharacterTextSplitter(
@@ -40,9 +52,9 @@ def ingestar_documento_no_topico(caminho_pdf: str, topico_escolhido: str, host: 
     chunks = text_splitter.split_documents(documents)
 
     # 3. Inject metadata into each chunk
-    nome_arquivo = os.path.basename(caminho_pdf)
     data_upload = datetime.datetime.now(datetime.timezone.utc).isoformat()
     for chunk in chunks:
+        chunk.metadata["doc_id"] = doc_id
         chunk.metadata["topico"] = topico_escolhido
         chunk.metadata["nome_arquivo"] = nome_arquivo
         chunk.metadata["data_upload"] = data_upload
@@ -73,7 +85,7 @@ def ingestar_documento_no_topico(caminho_pdf: str, topico_escolhido: str, host: 
         verify_certs=False,
     )
 
-    return len(chunks)
+    return len(chunks), doc_id
 
 def fetch_url_content(url: str) -> str:
     """

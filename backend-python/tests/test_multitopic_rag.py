@@ -26,10 +26,16 @@ def test_guardrails_length_limit():
     with pytest.raises(ValueError, match="A pergunta excede o tamanho máximo permitido."):
         check_input_guardrail(long_input)
 
+import sqlite3
+from app.database import init_db, DB_PATH
+
 # 2. Ingestion Logic Mocked Tests
 @patch("app.ingest.PyPDFLoader")
 @patch("app.ingest.OpenSearchVectorSearch")
 def test_ingestar_documento_no_topico(mock_vectorstore, mock_pdfloader):
+    # Ensure database table is initialized
+    init_db()
+
     # Mocking PyPDFLoader to return mock documents
     mock_doc = MagicMock()
     mock_doc.page_content = "This is a document about log rotation in enterprise servers."
@@ -42,24 +48,39 @@ def test_ingestar_documento_no_topico(mock_vectorstore, mock_pdfloader):
     # Mocking OpenSearchVectorSearch.from_documents
     mock_vectorstore.from_documents.return_value = MagicMock()
 
-    chunks_count = ingestar_documento_no_topico("/tmp/test_file.pdf", "Financeiro")
+    chunks_count, doc_id = ingestar_documento_no_topico("/tmp/test_file.pdf", "Financeiro")
 
     # Check loaders and splitter worked
     assert chunks_count > 0
+    assert doc_id is not None
     mock_pdfloader.assert_called_once_with("/tmp/test_file.pdf")
     mock_vectorstore.from_documents.assert_called_once()
 
-    # Check that documents passed to from_documents contain topic metadata
+    # Check that documents passed to from_documents contain topic and doc_id metadata
     args, kwargs = mock_vectorstore.from_documents.call_args
     passed_docs = kwargs["documents"]
     for doc in passed_docs:
+        assert doc.metadata["doc_id"] == doc_id
         assert doc.metadata["topico"] == "Financeiro"
         assert doc.metadata["nome_arquivo"] == "test_file.pdf"
+
+    # Query relational database to assert that document copy is saved correctly
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT doc_id, filename, topic, full_text FROM documentos WHERE doc_id = ?", (doc_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    assert row is not None
+    assert row[0] == doc_id
+    assert row[1] == "test_file.pdf"
+    assert row[2] == "Financeiro"
+    assert "log rotation" in row[3]
 
 # 3. Endpoint Tests
 @patch("app.main.ingestar_documento_no_topico")
 def test_endpoint_upload_pdf(mock_ingest):
-    mock_ingest.return_value = 3
+    mock_ingest.return_value = (3, "dummy-doc-id-123")
 
     # Send mock pdf file
     files = {"file": ("manual.pdf", b"Simulated PDF content", "application/pdf")}
@@ -71,6 +92,7 @@ def test_endpoint_upload_pdf(mock_ingest):
     json_resp = response.json()
     assert json_resp["status"] == "sucesso"
     assert json_resp["topico"] == "Tecnologia"
+    assert json_resp["doc_id"] == "dummy-doc-id-123"
     assert json_resp["chunks_criados"] == 3
 
 def test_endpoint_upload_non_pdf():

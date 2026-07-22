@@ -12,6 +12,7 @@ from app.embeddings import generate_embeddings, generate_query_embedding
 from app.opensearch_client import OpenSearchClient
 from app.ingest import fetch_url_content, ingestar_documento_no_topico
 from app.guardrails import check_input_guardrail
+from app.database import init_db
 from dotenv import load_dotenv
 
 from langchain_community.vectorstores import OpenSearchVectorSearch
@@ -65,7 +66,12 @@ class MockOrRealLLM(LLM):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Create index
+    # Startup: Create index and init SQLite db
+    try:
+        init_db()
+    except Exception as e:
+        logger.warning(f"Could not initialize relational SQLite database on startup: {e}")
+
     try:
         os_client.create_index()
     except Exception as e:
@@ -171,12 +177,13 @@ async def upload_arquivo(
             shutil.copyfileobj(file.file, buffer)
 
         # Call ingestion helper
-        total_chunks = ingestar_documento_no_topico(caminho_temp, topico)
+        total_chunks, doc_id = ingestar_documento_no_topico(caminho_temp, topico)
 
         return {
             "status": "sucesso",
             "mensagem": f"Arquivo '{file.filename}' indexado com sucesso!",
             "topico": topico,
+            "doc_id": doc_id,
             "chunks_criados": total_chunks
         }
     except Exception as e:
