@@ -1,8 +1,12 @@
 import uuid
 import logging
 import time
-from typing import Optional
-from fastapi import FastAPI, HTTPException, Request, Response, Depends, Security
+import os
+import re
+import shutil
+import tempfile
+from typing import Optional, List, Any
+from fastapi import FastAPI, HTTPException, Request, Response, Depends, Security, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
@@ -40,7 +44,19 @@ logger = logging.getLogger(__name__)
 limiter = Limiter(key_func=get_remote_address)
 
 # Initialize metrics
+from prometheus_client import REGISTRY
+if "http_requests_total" in REGISTRY._names_to_collectors:
+    try:
+        REGISTRY.unregister(REGISTRY._names_to_collectors["http_requests_total"])
+    except KeyError:
+        pass
 REQUEST_COUNT = Counter("http_requests_total", "Total HTTP requests", ["method", "endpoint", "status"])
+
+if "http_request_duration_seconds" in REGISTRY._names_to_collectors:
+    try:
+        REGISTRY.unregister(REGISTRY._names_to_collectors["http_request_duration_seconds"])
+    except KeyError:
+        pass
 REQUEST_DURATION = Histogram("http_request_duration_seconds", "HTTP request duration", ["method", "endpoint"])
 
 os_client = OpenSearchClient()
@@ -241,3 +257,125 @@ def health_check():
 @app.get("/metrics")
 def metrics():
     return Response(content=generate_latest(), media_type="text/plain")
+
+@app.post("/api/v1/upload")
+async def upload_pdf(
+    topico: str = Form(...),
+    file: UploadFile = File(...)
+):
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Apenas arquivos PDF são aceitos")
+
+    try:
+        suffix = os.path.splitext(file.filename)[1]
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            shutil.copyfileobj(file.file, tmp)
+            temp_path = tmp.name
+
+        chunks_count, doc_id = ingestar_documento_no_topico(temp_path, topico)
+        return {
+            "status": "sucesso",
+            "mensagem": f"Arquivo '{file.filename}' indexado com sucesso!",
+            "topico": topico,
+            "doc_id": doc_id,
+            "chunks_criados": chunks_count
+        }
+    except Exception as e:
+        logger.error(f"Erro ao processar upload: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if 'temp_path' in locals() and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+@app.post("/api/v1/chat")
+async def chat_multitopic(query_request: QueryRequest):
+    try:
+        # 1. Active input guardrail
+        pergunta_validada = check_input_guardrail(query_request.pergunta)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    try:
+        # 2. OpenSearch Vector Store & Retriever
+        from app.ingest import SentenceTransformerEmbeddings, sentence_transformer_model
+        embeddings = SentenceTransformerEmbeddings(sentence_transformer_model)
+
+        host = os.getenv("OPENSEARCH_HOST", "localhost")
+        port = int(os.getenv("OPENSEARCH_PORT", 9200))
+        user = os.getenv("OPENSEARCH_USER", "admin")
+        pass_ = os.getenv("OPENSEARCH_PASS", "admin")
+        opensearch_url = f"http://{host}:{port}"
+
+        vector_store = OpenSearchVectorSearch(
+            index_name="documentos-multitopicos",
+            embedding_function=embeddings,
+            opensearch_url=opensearch_url,
+            http_auth=(user, pass_),
+        )
+
+        retriever = vector_store.as_retriever(
+            search_kwargs={
+                "k": 3,
+                "pre_filter": {
+                    "bool": {
+                        "filter": [
+                            {"term": {"metadata.topico.keyword": query_request.topico}}
+                        ]
+                    }
+                }
+            }
+        )
+
+        # 3. Retrieve relevant documents
+        try:
+            docs = retriever.invoke(pergunta_validada)
+        except Exception as e:
+            logger.warning(f"Error invoking OpenSearch retriever: {e}")
+            docs = []
+
+        # 4. Create prompt template
+        template = """Você é um assistente virtual especialista e preciso. Responda à pergunta do usuário utilizando APENAS as informações fornecidas no CONTEXTO abaixo.
+Se a resposta não estiver contida no contexto, diga claramente "Não encontrei essa informação nos documentos fornecidos." e não tente inventar.
+
+---
+Contexto:
+{context}
+---
+
+Pergunta:
+{question}
+
+RESPOSTA:"""
+        prompt = ChatPromptTemplate.from_template(template)
+
+        def format_docs(docs):
+            if not docs:
+                return "Não possui dados suficientes."
+            return "\n\n".join(f"[Chunk {i+1}]: {doc.page_content}" for i, doc in enumerate(docs))
+
+        llm = MockOrRealLLM()
+        rag_chain = (
+            {"context": retriever | format_docs, "question": RunnablePassthrough()}
+            | prompt
+            | llm
+            | StrOutputParser()
+        )
+
+        resposta = rag_chain.invoke(pergunta_validada)
+
+        return {
+            "topico_pesquisado": query_request.topico,
+            "resposta": resposta,
+            "documentos_relevantes": [
+                {
+                    "conteudo": doc.page_content,
+                    "fonte": doc.metadata.get("nome_arquivo", "Desconhecido")
+                } for doc in docs
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Chat failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
